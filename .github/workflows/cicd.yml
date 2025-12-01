@@ -2,8 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build-and-test:
@@ -13,84 +14,161 @@ jobs:
       jar-path: ${{ steps.set-jar-path.outputs.jar-path }}
 
     steps:
+      # Шаг 1: Получение кода
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # Шаг 2: КЭШИРОВАНИЕ Maven зависимостей
+      - name: Cache Maven dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/**/*.lock  # Исключаем lock-файлы
+          key: maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-
+
+      # Шаг 3: Настройка Java с кэшированием Maven
       - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
+          cache: 'maven'  # Автоматическое кэширование Maven
 
-      - name: Build with Maven
-        run: mvn clean package --no-transfer-progress
-  
+      # Шаг 4: Скачивание зависимостей (использует кэш)
+      - name: Download dependencies
+        run: mvn dependency:go-offline --no-transfer-progress -B
+
+      # Шаг 5: Запуск тестов (до сборки)
       - name: Run tests
-        run: mvn test
-  
+        run: mvn test --no-transfer-progress -B
+
+      # Шаг 6: Сборка проекта (тесты уже пройдены)
+      - name: Build with Maven
+        run: mvn clean package --no-transfer-progress -DskipTests -B
+
+      # Шаг 7: Сохранение пути к JAR
       - name: Save JAR path
         id: set-jar-path
-        run: echo "jar-path=target/configCICD-0.0.1-SNAPSHOT.jar"
-  
+        run: echo "jar-path=target/configCICD-0.0.1-SNAPSHOT.jar" >> $GITHUB_OUTPUT
+
+      # Шаг 8: Загрузка артефакта
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
           name: configCICD-jar
           path: target/configCICD-0.0.1-SNAPSHOT.jar
-          
- # Уведомление о результате сборки (успех)
+          retention-days: 7
+
+      # Шаг 9: Уведомления
       - name: Notify on success
         if: success()
         run: |
           echo "✅ Сборка и тесты успешно завершены!"
           echo "JAR-файл сохранен как артефакт"
-    
-    # Уведомление о неудаче
+          echo "Кэш зависимостей обновлен"
+
       - name: Notify on failure
         if: failure()
         run: |
           echo "❌ Сборка или тесты завершились с ошибкой!"
-          
+          echo "Проверьте логи выше для деталей"
+
+  # Условные job'ы только для main ветки
   build-and-push-docker:
     needs: build-and-test
     runs-on: ubuntu-latest
+    # Запускаем только при пуше в main, не для PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Download JAR artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: configCICD-jar
-        path: target
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: configCICD-jar
+          path: target/
 
-    - name: Log in Docker Hub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKERHUB_NAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      # Кэш для Docker слоев
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+          buildkitd-flags: --debug
 
-    - name: Build Docker image
-      run: docker build -t ${{ secrets.DOCKERHUB_NAME }}/configCICD:latest .
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-    - name: Push Docker image
-      run: docker push ${{ secrets.DOCKERHUB_NAME }}/configCICD:latest
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:${{ github.sha }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          platforms: linux/amd64
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
   deploy:
     needs: build-and-push-docker
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Deploy on VM via host machine
-        uses: appleboy/ssh-action@v0.1.6
+        uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.MY_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           port: 50000
           script: |
-            docker pull ${{ secrets.DOCKERHUB_NAME }}/configCICD:latest
+            echo "🔄 Pulling latest Docker image..."
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
+            
+            echo "🛑 Stopping existing container..."
             docker stop configCICD || true
             docker rm configCICD || true
-            docker run -d --name configCICD -p 8080:8080 ${{ secrets.DOCKERHUB_NAME }}/configCICD:latest
+            
+            echo "🧹 Cleaning up unused images..."
+            docker image prune -af --filter "until=24h"
+            
+            echo "🚀 Starting new container..."
+            docker run -d \
+              --name configCICD \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              -e "SPRING_PROFILES_ACTIVE=prod" \
+              ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
+            
+            echo "⏳ Waiting for application to start..."
+            sleep 10
+            
+            echo "🔍 Checking container status..."
+            docker ps --filter "name=configCICD" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            echo "✅ Deployment completed successfully!"
