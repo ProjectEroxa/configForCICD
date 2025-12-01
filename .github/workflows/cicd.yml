@@ -151,15 +151,15 @@ jobs:
             docker pull ${{ secrets.DOCKERHUB_NAME }}/configcicd:latest
             
             echo "🛑 Stopping existing container..."
-            docker stop configCICD || true
-            docker rm configCICD || true
+            docker stop configcicd || true
+            docker rm configcicd || true
             
             echo "🧹 Cleaning up unused images..."
             docker image prune -af --filter "until=24h"
             
             echo "🚀 Starting new container..."
             docker run -d \
-              --name configCICD \
+              --name configcicd \
               --restart unless-stopped \
               -p 8080:8080 \
               -e "SPRING_PROFILES_ACTIVE=prod" \
@@ -169,6 +169,6 @@ jobs:
             sleep 10
             
             echo "🔍 Checking container status..."
-            docker ps --filter "name=configCICD" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            docker ps --filter "name=configcicd" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             
             echo "✅ Deployment completed successfully!"
