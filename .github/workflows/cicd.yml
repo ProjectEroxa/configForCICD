@@ -112,8 +112,8 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_NAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -122,8 +122,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_NAME }}/configcicd:latest
+            ${{ secrets.DOCKERHUB_NAME }}/configcicd:${{ github.sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
           platforms: linux/amd64
@@ -148,7 +148,7 @@ jobs:
           port: 50000
           script: |
             echo "🔄 Pulling latest Docker image..."
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
+            docker pull ${{ secrets.DOCKERHUB_NAME }}/configcicd:latest
             
             echo "🛑 Stopping existing container..."
             docker stop configCICD || true
@@ -163,7 +163,7 @@ jobs:
               --restart unless-stopped \
               -p 8080:8080 \
               -e "SPRING_PROFILES_ACTIVE=prod" \
-              ${{ secrets.DOCKERHUB_USERNAME }}/configcicd:latest
+              ${{ secrets.DOCKERHUB_NAME }}/configcicd:latest
             
             echo "⏳ Waiting for application to start..."
             sleep 10
