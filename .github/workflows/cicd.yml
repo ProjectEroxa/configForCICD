@@ -145,7 +145,7 @@ jobs:
           host: ${{ secrets.MY_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          port: 22
+          port: 50000
           script: |
             echo "🔄 Pulling latest Docker image..."
             docker pull ${{ secrets.DOCKERHUB_NAME }}/configcicd:latest
